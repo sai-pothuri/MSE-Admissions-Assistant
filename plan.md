@@ -6,8 +6,9 @@ CLAUDE.md fully specifies a RAG-based MSE admissions chatbot with a faculty admi
 
 **Decisions confirmed with the user:**
 - Frontend: **React + Vite + TypeScript**.
-- Phase 1 will use the **real 3 admissions PDFs** (user will provide them).
 - Model split: **Claude Haiku** for high-volume classification calls (auto-tagging, pre-classification, query classification), **Claude Sonnet** for final answer generation.
+- Git workflow: each phase gets its own branch off `main`; when a phase's work is complete, open a PR for the user to review and merge (not auto-merged).
+- Source documents: the real content is a general student handbook, an FAQ doc, and details on two programs within the department — none of it pre-sorted into the 5 category folders. Decision: don't force manual category sorting. All source docs land in a new `data/knowledge_base/general/` intake folder; folder placement is organizational only. The authoritative category per chunk comes from Phase 2's per-chunk auto-tagging into the Qdrant payload, regardless of which folder the source file sits in. The FAQ (currently .docx) will be converted to PDF by the user before ingestion — the pipeline stays PDF-only (PyMuPDF) per CLAUDE.md, no docx extraction path added.
 
 ## Guiding principle for sequencing
 
@@ -29,7 +30,7 @@ backend/app/main.py
 backend/app/api/routes/health.py
 backend/app/config/settings.py    # pydantic BaseSettings: secrets, URLs, collection names
 infra/docker-compose.yml          # qdrant only, to start
-data/knowledge_base/{admissions,curriculum,tuition,deadlines,faculty}/.gitkeep
+data/knowledge_base/{admissions,curriculum,tuition,deadlines,faculty,general}/.gitkeep
 eval/.gitkeep
 .gitignore
 .env.example
@@ -38,13 +39,17 @@ README.md
 
 Note: `git init` + first commit is a state-changing action the user runs (or approves explicitly), not something done silently.
 
+**Status: done** — committed and pushed to `main` (`https://github.com/sai-pothuri/MSE-Admissions-Assistant`). The `general/` folder above was added after this phase closed (see Source documents decision) and will be created as a small follow-up commit on `main`, not a new phase branch.
+
 ---
 
 ## Phase 1 — Minimal vertical slice: ingestion → retrieval → generation
 
-**Goal:** prove the core RAG loop end-to-end against the real 3 PDFs. **No admin console, no guardrails yet** — category is folder-derived as a placeholder; no off-limits check, no confidence gate, no numerical verification. Smallest possible working system.
+**Branch:** `phase-1-ingestion-retrieval-generation`
 
-**Deliverables:** CLI-driven ingestion of the 3 PDFs into a single Qdrant collection; a `POST /query` endpoint doing unfiltered vector search + Claude generation with citations; manual smoke test proving grounded, cited answers.
+**Goal:** prove the core RAG loop end-to-end against the real source documents (handbook, FAQ, two program detail docs — all in `data/knowledge_base/general/`). **No admin console, no guardrails yet** — category is folder-derived as a placeholder, so everything will show up tagged `general` until Phase 2's real per-chunk auto-tagging replaces it; no off-limits check, no confidence gate, no numerical verification. Smallest possible working system.
+
+**Deliverables:** CLI-driven ingestion of the source PDFs into a single Qdrant collection; a `POST /query` endpoint doing unfiltered vector search + Claude generation with citations; manual smoke test proving grounded, cited answers.
 
 ```
 backend/app/clients/{qdrant_client,voyage_client,anthropic_client}.py
@@ -65,28 +70,31 @@ backend/tests/integration/test_query_endpoint.py
 ```
 
 ### Phase 1 task order
-1. Get the 3 real PDFs into `data/knowledge_base/<category>/`.
-2. Phase 0 scaffolding + `git init` (user-run).
-3. Core backend deps installed.
+1. Get the source PDFs (handbook, FAQ converted to PDF, two program docs) into `data/knowledge_base/general/`.
+2. Create `phase-1-ingestion-retrieval-generation` branch off `main`.
+3. Core backend deps already installed from Phase 0; reactivate venv.
 4. `infra/docker-compose.yml` with Qdrant; bring it up locally.
-5. `backend/app/config/settings.py`.
+5. `backend/app/config/settings.py` already exists from Phase 0 — extend if needed.
 6. Client wrappers (Qdrant, Voyage, Anthropic).
 7. `init_collection.py` — vector size matched to chosen Voyage embedding model, cosine distance.
 8. `pdf_extraction.py` — unit test against a sample PDF.
 9. `chunking.py` — unit test on extracted text.
 10. `embedding.py` — Voyage embed wrapper (document + query variants).
-11. `indexer.py` — folder-derived category placeholder; real auto-tagging deferred to Phase 2.
-12. `ingest.py` — run against the 3 real PDFs into local Qdrant.
+11. `indexer.py` — folder-derived category placeholder (`general` for all docs at this stage); real auto-tagging deferred to Phase 2.
+12. `ingest.py` — run against the real source PDFs into local Qdrant.
 13. `vector_search.py` — unfiltered top_k search.
 14. `prompt_templates.py` + `generator.py` — Claude Sonnet, context-only + citation system prompt.
 15. `schemas.py` + `query.py` — wire retrieval+generation into `POST /query`.
-16. Manual smoke test: real questions against the 3 PDFs via curl/HTTPie, confirm grounded answers with correct citations.
+16. Manual smoke test: real questions against the handbook/FAQ/program docs via curl/HTTPie, confirm grounded answers with correct citations.
 17. Unit + integration tests.
 18. README section: bring up Qdrant, run ingestion, start API, smoke-test.
+19. Push branch, open PR into `main` for review.
 
 ---
 
 ## Phase 2 — Guardrail layer
+
+**Branch:** `phase-2-guardrails`
 
 **Goal:** wrap Phase 1 with the guardrails that are the actual engineering value-add of this project, each independently unit-testable.
 
@@ -119,6 +127,8 @@ backend/tests/unit/test_auto_tagging.py
 
 ## Phase 3 — Eval harness & threshold calibration
 
+**Branch:** `phase-3-eval-harness`
+
 **Goal:** build the eval set, then use it to calibrate the confidence threshold introduced in Phase 2.
 
 ```
@@ -133,6 +143,8 @@ Scoring approach: manual expected-behavior labels drive pass/fail for off-limits
 ---
 
 ## Phase 4 — Admin console backend (API only)
+
+**Branch:** `phase-4-admin-console-backend`
 
 **Goal:** git-backed file management, chunk preview/re-tag, staging/promotion, edit log, re-indexing, and the swappable auth module — all server-side, no UI yet.
 
@@ -163,6 +175,8 @@ Key design points:
 
 ## Phase 5 — Frontend (React + Vite + TypeScript)
 
+**Branch:** `phase-5-frontend`
+
 **Goal:** chatbot UI + admin console UI, built once the backend API surface is stable.
 
 ```
@@ -182,6 +196,8 @@ Chat widget: question input, answer + citations display, visible decline/fallbac
 
 ## Phase 6 — Containerization & deployment
 
+**Branch:** `phase-6-containerization-deployment`
+
 **Goal:** full Docker Compose orchestration for self-hosting on a CMU department server.
 
 ```
@@ -198,6 +214,8 @@ Frontend is built as a static bundle and served as its own container (or via a l
 ---
 
 ## Phase 7 — Hardening & polish
+
+**Branch:** `phase-7-hardening-polish`
 
 - Structured logging for guardrail decisions (which stage rejected/approved, scores, category) — needed for debugging and the auditability goal of this project.
 - Basic rate limiting on the public `/query` endpoint (not in CLAUDE.md's spec, but reasonable given self-hosting on a shared department server — flagging as an addition, can be dropped if out of scope).
@@ -219,7 +237,7 @@ Frontend is built as a static bundle and served as its own container (or via a l
 
 ## Verification approach
 
-- **Phase 1**: manual smoke test with curl/HTTPie against the real 3 PDFs — ask questions spanning their actual content, confirm grounded answers with correct source + page citations; run `pytest backend/tests` for unit/integration coverage.
+- **Phase 1**: manual smoke test with curl/HTTPie against the real source documents (handbook, FAQ, program docs) — ask questions spanning their actual content, confirm grounded answers with correct source + page citations; run `pytest backend/tests` for unit/integration coverage.
 - **Phase 2**: unit tests per guardrail stage with synthetic inputs (no network calls); manual test of a few off-limits and low-confidence queries to confirm short-circuiting works (generation not invoked).
 - **Phase 3**: run `eval/harness.py` end-to-end, review the FP/FN report from `calibrate_threshold.py`, confirm the chosen threshold is checked into `thresholds.py`.
 - **Phase 4**: integration test of full upload → git commit → re-index → warning flow; verify staging→prod promotion moves points without affecting prod until promoted.
