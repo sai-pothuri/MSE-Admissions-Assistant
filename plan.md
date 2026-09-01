@@ -98,6 +98,8 @@ backend/tests/integration/test_query_endpoint.py
 
 **Branch:** `phase-2-guardrails`
 
+**Status: done** — [PR #2](https://github.com/sai-pothuri/MSE-Admissions-Assistant/pull/2) open for review. Verified against the real knowledge base: re-ingestion auto-tagged 109 chunks; live smoke tests confirmed off-limits redirects (admissions predictions, visa advice, faculty commentary) short-circuit before retrieval, category-filtered retrieval returns grounded answers, the confidence gate declines an out-of-scope-but-not-off-limits question without calling generation, and numerical verification passes real tuition figures. Confidence thresholds are provisional (picked from a handful of real similarity scores), to be properly calibrated in Phase 3.
+
 **Goal:** wrap Phase 1 with the guardrails that are the actual engineering value-add of this project, each independently unit-testable.
 
 **Deliverables:** centralized config for taxonomy/off-limits/thresholds; real Claude-Haiku-based auto-tagging replacing the folder-derived placeholder; full per-query pipeline: pre-classify → classify category → filtered search → confidence gate → generate → conditional numerical verification.

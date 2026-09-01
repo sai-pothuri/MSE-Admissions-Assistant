@@ -4,7 +4,9 @@ RAG-based chatbot answering prospective student questions for CMU's Master of So
 
 ## Status
 
-Phase 1 — minimal ingestion → retrieval → generation vertical slice. No guardrails, no admin console, no category filtering yet (see `plan.md`).
+Phase 2 — guardrail layer. The `/query` pipeline now runs: pre-classification (off-limits topic check) → query category classification → category-filtered retrieval → confidence gate → generation → numerical verification (tuition/deadlines only). Ingestion auto-tags each chunk's category via Claude rather than inheriting it from the source folder. No admin console or eval harness yet (see `plan.md`).
+
+Guardrail config lives in `backend/app/config/`: category taxonomy (`taxonomy.py`), off-limits topics (`offlimits.yaml`, edit without touching code), and thresholds (`thresholds.py` — confidence gate cutoffs are provisional pending Phase 3's eval-based calibration).
 
 ## Local development setup
 

@@ -2,12 +2,14 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from qdrant_client import QdrantClient
 from qdrant_client.models import FieldCondition, Filter, FilterSelector, MatchValue, PointStruct
 
 from app.clients.qdrant_client import get_qdrant_client
 from app.clients.voyage_client import get_voyage_client
 from app.config.settings import get_settings
 from app.models.schemas import ChunkPayload
+from app.services.ingestion.auto_tagging import classify_chunk
 from app.services.ingestion.chunking import chunk_blocks
 from app.services.ingestion.embedding import embed_documents
 from app.services.ingestion.pdf_extraction import extract_blocks
@@ -19,34 +21,42 @@ class IndexResult:
     error: str | None = None
 
 
-def index_file(pdf_path: Path) -> int:
-    """Extract, chunk, embed, and upsert a single PDF. Category is
-    folder-derived (the parent directory name under data/knowledge_base/) —
-    a Phase 1 placeholder; Phase 2 replaces it with real per-chunk
-    auto-tagging via `app.clients.anthropic_client`.
-
-    Re-indexing a file fully replaces its existing chunks (delete by
-    source_file, then re-upsert) so repeated runs stay idempotent."""
-    settings = get_settings()
-    qdrant = get_qdrant_client()
-    voyage = get_voyage_client()
-    category = pdf_path.parent.name
-
+def _delete_existing_chunks(qdrant: QdrantClient, collection: str, source_file: str) -> None:
     qdrant.delete(
-        collection_name=settings.qdrant_collection_prod,
+        collection_name=collection,
         points_selector=FilterSelector(
             filter=Filter(
-                must=[FieldCondition(key="source_file", match=MatchValue(value=pdf_path.name))]
+                must=[FieldCondition(key="source_file", match=MatchValue(value=source_file))]
             )
         ),
     )
 
+
+def index_file(pdf_path: Path) -> int:
+    """Extract, chunk, embed, auto-tag, and upsert a single PDF. Each
+    chunk's category is independently classified by Claude (one call per
+    chunk, per CLAUDE.md) rather than inherited from the source file's
+    folder — a single document can genuinely span multiple categories.
+
+    Re-indexing a file fully replaces its existing chunks (delete by
+    source_file, then re-upsert), but the delete only happens once the new
+    chunks are fully prepared (embedded and classified) — if per-chunk
+    classification fails partway through, the file's existing chunks are
+    left untouched rather than being wiped with nothing to replace them."""
+    settings = get_settings()
+    qdrant = get_qdrant_client()
+    voyage = get_voyage_client()
+
     blocks = extract_blocks(pdf_path)
     chunks = chunk_blocks(blocks)
     if not chunks:
+        # A genuinely empty re-extraction (not a mid-process failure) —
+        # reflect that the file now has no content.
+        _delete_existing_chunks(qdrant, settings.qdrant_collection_prod, pdf_path.name)
         return 0
 
     embeddings = embed_documents(voyage, [chunk.text for chunk in chunks])
+    categories = [classify_chunk(chunk.text) for chunk in chunks]
 
     points = [
         PointStruct(
@@ -57,12 +67,13 @@ def index_file(pdf_path: Path) -> int:
                 source_file=pdf_path.name,
                 page_number=chunk.page_number,
                 category=category,
-                auto_tagged=False,
+                auto_tagged=True,
             ).model_dump(),
         )
-        for chunk, embedding in zip(chunks, embeddings, strict=True)
+        for chunk, embedding, category in zip(chunks, embeddings, categories, strict=True)
     ]
 
+    _delete_existing_chunks(qdrant, settings.qdrant_collection_prod, pdf_path.name)
     qdrant.upsert(collection_name=settings.qdrant_collection_prod, points=points)
     return len(points)
 
