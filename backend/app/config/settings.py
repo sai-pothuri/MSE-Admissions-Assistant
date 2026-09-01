@@ -20,4 +20,6 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    # Required fields are supplied by env vars / .env at runtime, not by the
+    # caller — mypy can't see that through pydantic-settings' BaseSettings.
+    return Settings()  # type: ignore[call-arg]

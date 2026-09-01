@@ -4,7 +4,7 @@ RAG-based chatbot answering prospective student questions for CMU's Master of So
 
 ## Status
 
-Phase 0 — repo scaffolding. No business logic yet.
+Phase 1 — minimal ingestion → retrieval → generation vertical slice. No guardrails, no admin console, no category filtering yet (see `plan.md`).
 
 ## Local development setup
 
@@ -20,14 +20,33 @@ Phase 0 — repo scaffolding. No business logic yet.
    source .venv/bin/activate
    pip install -e ".[dev]"
    ```
-4. Run the API:
+4. Create the Qdrant collection (one-time, or after wiping Qdrant storage):
+   ```
+   python -m app.scripts.init_collection
+   ```
+5. Ingest the knowledge base (source PDFs live in `data/knowledge_base/general/`):
+   ```
+   python -m app.scripts.ingest ../data/knowledge_base
+   ```
+6. Run the API:
    ```
    uvicorn app.main:app --reload
    ```
-5. Check the health endpoint:
+7. Check the health endpoint:
    ```
    curl http://localhost:8000/health
    ```
+8. Ask a question:
+   ```
+   curl -X POST http://localhost:8000/query \
+     -H "Content-Type: application/json" \
+     -d '{"question": "What are the admission requirements for the MSE program?"}'
+   ```
+
+Run the test suite (all mocked, no live API calls or Qdrant needed):
+```
+cd backend && source .venv/bin/activate && pytest
+```
 
 ## Repo structure
 
