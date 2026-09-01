@@ -8,6 +8,23 @@ from app.services.retrieval.vector_search import SearchResult
 MAX_TOKENS = 1024
 
 
+def referenced_results(answer: str, results: list[SearchResult]) -> list[SearchResult]:
+    """Chunks whose source_file is actually mentioned in the answer text —
+    used both to build citations and to scope numerical verification to the
+    sources the model actually drew from, deduped by (source_file, page)."""
+    seen: set[tuple[str, int]] = set()
+    referenced: list[SearchResult] = []
+    for r in results:
+        if r.chunk.source_file not in answer:
+            continue
+        key = (r.chunk.source_file, r.chunk.page_number)
+        if key in seen:
+            continue
+        seen.add(key)
+        referenced.append(r)
+    return referenced
+
+
 def generate_answer(
     client: anthropic.Anthropic, question: str, results: list[SearchResult]
 ) -> tuple[str, list[Citation]]:
@@ -39,15 +56,9 @@ def generate_answer(
     # Only cite sources the model actually referenced in the answer text
     # (per the prompt's "cite the source file(s) you used" instruction) —
     # a retrieved-but-unused chunk (e.g. on a refusal) shouldn't be cited.
-    seen: set[tuple[str, int]] = set()
-    citations: list[Citation] = []
-    for r in results:
-        if r.chunk.source_file not in answer:
-            continue
-        key = (r.chunk.source_file, r.chunk.page_number)
-        if key in seen:
-            continue
-        seen.add(key)
-        citations.append(Citation(source_file=r.chunk.source_file, page_number=r.chunk.page_number))
+    citations = [
+        Citation(source_file=r.chunk.source_file, page_number=r.chunk.page_number)
+        for r in referenced_results(answer, results)
+    ]
 
     return answer, citations

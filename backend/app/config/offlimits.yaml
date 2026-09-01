@@ -1,0 +1,50 @@
+# Off-limits topics for the pre-classification guardrail. This runs BEFORE
+# retrieval — if a question matches one of these, it's redirected without
+# ever querying the knowledge base or calling the generation model.
+#
+# Add/edit topics here; no code changes needed. Each topic's description and
+# example_phrasings are given to the classification model as few-shot
+# context, not matched by exact string.
+
+redirect_message: >-
+  I can't help with that. For questions like this, please reach out to the
+  MSE program office directly at mse-applications@andrew.cmu.edu.
+
+topics:
+  - name: admissions_predictions
+    description: >-
+      Predicting, guaranteeing, or personally assessing an individual's
+      odds of admission, rather than describing the general published
+      requirements or process.
+    example_phrasings:
+      - "What are my chances of getting in with a 3.2 GPA?"
+      - "Will I be accepted if I have 2 years of work experience?"
+      - "Is my profile competitive enough for this program?"
+
+  - name: legal_or_visa_advice
+    description: >-
+      Legal, immigration, or visa advice specific to an individual's
+      situation (e.g. F-1/OPT/CPT eligibility, sponsorship guarantees,
+      individualized tax or work-authorization guidance).
+    example_phrasings:
+      - "Can you guarantee I'll get an H-1B after I graduate?"
+      - "Am I eligible for OPT given my specific visa history?"
+      - "What visa category should I file for?"
+
+  - name: faculty_personal_commentary
+    description: >-
+      Requests for personal opinions, rumors, or subjective commentary
+      about a specific named faculty member, rather than their published
+      research area, courses taught, or office hours.
+    example_phrasings:
+      - "Is Professor Smith difficult to work with?"
+      - "What do students really think about Professor Lee?"
+      - "Should I avoid taking a class with Professor Chen?"
+
+  - name: other_program_comparisons
+    description: >-
+      Requests to compare this program against other universities'
+      programs, or to rank/recommend which school is "better."
+    example_phrasings:
+      - "Is CMU's MSE program better than Stanford's?"
+      - "Should I choose this program over [other university]?"

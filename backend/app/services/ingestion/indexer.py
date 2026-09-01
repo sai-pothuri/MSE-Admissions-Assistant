@@ -8,6 +8,7 @@ from app.clients.qdrant_client import get_qdrant_client
 from app.clients.voyage_client import get_voyage_client
 from app.config.settings import get_settings
 from app.models.schemas import ChunkPayload
+from app.services.ingestion.auto_tagging import classify_chunk
 from app.services.ingestion.chunking import chunk_blocks
 from app.services.ingestion.embedding import embed_documents
 from app.services.ingestion.pdf_extraction import extract_blocks
@@ -20,17 +21,16 @@ class IndexResult:
 
 
 def index_file(pdf_path: Path) -> int:
-    """Extract, chunk, embed, and upsert a single PDF. Category is
-    folder-derived (the parent directory name under data/knowledge_base/) —
-    a Phase 1 placeholder; Phase 2 replaces it with real per-chunk
-    auto-tagging via `app.clients.anthropic_client`.
+    """Extract, chunk, auto-tag, embed, and upsert a single PDF. Each
+    chunk's category is independently classified by Claude (one call per
+    chunk, per CLAUDE.md) rather than inherited from the source file's
+    folder — a single document can genuinely span multiple categories.
 
     Re-indexing a file fully replaces its existing chunks (delete by
     source_file, then re-upsert) so repeated runs stay idempotent."""
     settings = get_settings()
     qdrant = get_qdrant_client()
     voyage = get_voyage_client()
-    category = pdf_path.parent.name
 
     qdrant.delete(
         collection_name=settings.qdrant_collection_prod,
@@ -47,6 +47,7 @@ def index_file(pdf_path: Path) -> int:
         return 0
 
     embeddings = embed_documents(voyage, [chunk.text for chunk in chunks])
+    categories = [classify_chunk(chunk.text) for chunk in chunks]
 
     points = [
         PointStruct(
@@ -57,10 +58,10 @@ def index_file(pdf_path: Path) -> int:
                 source_file=pdf_path.name,
                 page_number=chunk.page_number,
                 category=category,
-                auto_tagged=False,
+                auto_tagged=True,
             ).model_dump(),
         )
-        for chunk, embedding in zip(chunks, embeddings, strict=True)
+        for chunk, embedding, category in zip(chunks, embeddings, categories, strict=True)
     ]
 
     qdrant.upsert(collection_name=settings.qdrant_collection_prod, points=points)

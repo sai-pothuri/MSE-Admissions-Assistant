@@ -1,12 +1,13 @@
 from dataclasses import dataclass
 
+from qdrant_client.models import FieldCondition, Filter, MatchValue
+
 from app.clients.qdrant_client import get_qdrant_client
 from app.clients.voyage_client import get_voyage_client
 from app.config.settings import get_settings
+from app.config.thresholds import TOP_K
 from app.models.schemas import ChunkPayload
 from app.services.ingestion.embedding import embed_query
-
-TOP_K = 5
 
 
 class CollectionNotReadyError(RuntimeError):
@@ -19,7 +20,7 @@ class SearchResult:
     score: float
 
 
-def search(question: str) -> list[SearchResult]:
+def search(question: str, category: str | None = None) -> list[SearchResult]:
     settings = get_settings()
     qdrant = get_qdrant_client()
     voyage = get_voyage_client()
@@ -31,9 +32,15 @@ def search(question: str) -> list[SearchResult]:
         )
 
     query_vector = embed_query(voyage, question)
+    query_filter = (
+        Filter(must=[FieldCondition(key="category", match=MatchValue(value=category))])
+        if category is not None
+        else None
+    )
     hits = qdrant.query_points(
         collection_name=settings.qdrant_collection_prod,
         query=query_vector,
+        query_filter=query_filter,
         limit=TOP_K,
     ).points
 
@@ -41,3 +48,15 @@ def search(question: str) -> list[SearchResult]:
         SearchResult(chunk=ChunkPayload.model_validate(hit.payload), score=hit.score)
         for hit in hits
     ]
+
+
+def top1_and_gap(results: list[SearchResult]) -> tuple[float, float]:
+    """Returns (top1_score, score_gap) for the confidence gate. With no
+    runner-up, the gap defaults to the top score itself — there's nothing
+    to be ambiguous against, so a missing second result shouldn't fail a
+    gap check on its own."""
+    if not results:
+        return 0.0, 0.0
+    top1 = results[0].score
+    gap = top1 - (results[1].score if len(results) > 1 else 0.0)
+    return top1, gap

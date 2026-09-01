@@ -17,6 +17,7 @@ def test_index_file_upserts_one_point_per_chunk(monkeypatch):
     monkeypatch.setattr(indexer, "extract_blocks", lambda path: fake_blocks)
     monkeypatch.setattr(indexer, "chunk_blocks", lambda blocks: fake_chunks)
     monkeypatch.setattr(indexer, "embed_documents", lambda client, texts: fake_embeddings)
+    monkeypatch.setattr(indexer, "classify_chunk", lambda text: "admissions")
     monkeypatch.setattr(indexer, "get_qdrant_client", lambda: mock_qdrant)
     monkeypatch.setattr(indexer, "get_voyage_client", lambda: mock_voyage)
 
@@ -29,8 +30,8 @@ def test_index_file_upserts_one_point_per_chunk(monkeypatch):
     points = kwargs["points"]
     assert len(points) == 1
     assert points[0].payload["source_file"] == "handbook.pdf"
-    assert points[0].payload["category"] == "general"
-    assert points[0].payload["auto_tagged"] is False
+    assert points[0].payload["category"] == "admissions"
+    assert points[0].payload["auto_tagged"] is True
 
 
 def test_index_file_deletes_existing_chunks_for_the_file_before_upserting(monkeypatch):
@@ -43,6 +44,7 @@ def test_index_file_deletes_existing_chunks_for_the_file_before_upserting(monkey
     monkeypatch.setattr(indexer, "extract_blocks", lambda path: fake_blocks)
     monkeypatch.setattr(indexer, "chunk_blocks", lambda blocks: fake_chunks)
     monkeypatch.setattr(indexer, "embed_documents", lambda client, texts: [[0.1, 0.2, 0.3]])
+    monkeypatch.setattr(indexer, "classify_chunk", lambda text: "admissions")
     monkeypatch.setattr(indexer, "get_qdrant_client", lambda: mock_qdrant)
     monkeypatch.setattr(indexer, "get_voyage_client", lambda: MagicMock())
 
