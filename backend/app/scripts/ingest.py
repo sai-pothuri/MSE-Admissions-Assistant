@@ -17,10 +17,21 @@ def main() -> None:
     root = Path(sys.argv[1])
     results = index_directory(root)
 
-    total = sum(results.values())
-    for path, count in results.items():
-        print(f"{path}: {count} chunks")
-    print(f"Total: {total} chunks indexed.")
+    total = 0
+    failures = 0
+    for path, result in results.items():
+        if result.error is not None:
+            print(f"{path}: FAILED - {result.error}")
+            failures += 1
+        else:
+            print(f"{path}: {result.chunk_count} chunks")
+            total += result.chunk_count
+
+    summary = f"Total: {total} chunks indexed"
+    summary += f", {failures} file(s) failed." if failures else "."
+    print(summary)
+    if failures:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

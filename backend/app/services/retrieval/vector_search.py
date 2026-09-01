@@ -9,6 +9,10 @@ from app.services.ingestion.embedding import embed_query
 TOP_K = 5
 
 
+class CollectionNotReadyError(RuntimeError):
+    """Raised when the Qdrant collection hasn't been created/ingested yet."""
+
+
 @dataclass
 class SearchResult:
     chunk: ChunkPayload
@@ -19,6 +23,12 @@ def search(question: str) -> list[SearchResult]:
     settings = get_settings()
     qdrant = get_qdrant_client()
     voyage = get_voyage_client()
+
+    if not qdrant.collection_exists(settings.qdrant_collection_prod):
+        raise CollectionNotReadyError(
+            f"Collection '{settings.qdrant_collection_prod}' does not exist yet. "
+            "Run `python -m app.scripts.init_collection` and ingest documents first."
+        )
 
     query_vector = embed_query(voyage, question)
     hits = qdrant.query_points(

@@ -24,17 +24,30 @@ def generate_answer(
     # Note: this SDK version's Messages API no longer exposes a `temperature`
     # param (CLAUDE.md calls for "low temperature" generation, but that knob
     # has been removed from the API surface) — grounding is enforced entirely
-    # through the system prompt instead.
+    # through the system prompt instead. Thinking is explicitly disabled so
+    # the full MAX_TOKENS budget goes to the visible answer, not adaptive
+    # reasoning tokens drawn from the same budget.
     message = client.messages.create(
         model=settings.anthropic_generation_model,
         max_tokens=MAX_TOKENS,
         system=SYSTEM_PROMPT,
+        thinking={"type": "disabled"},
         messages=[{"role": "user", "content": build_user_message(question, context_chunks)}],
     )
     answer = "".join(block.text for block in message.content if block.type == "text")
 
-    citations = [
-        Citation(source_file=r.chunk.source_file, page_number=r.chunk.page_number)
-        for r in results
-    ]
+    # Only cite sources the model actually referenced in the answer text
+    # (per the prompt's "cite the source file(s) you used" instruction) —
+    # a retrieved-but-unused chunk (e.g. on a refusal) shouldn't be cited.
+    seen: set[tuple[str, int]] = set()
+    citations: list[Citation] = []
+    for r in results:
+        if r.chunk.source_file not in answer:
+            continue
+        key = (r.chunk.source_file, r.chunk.page_number)
+        if key in seen:
+            continue
+        seen.add(key)
+        citations.append(Citation(source_file=r.chunk.source_file, page_number=r.chunk.page_number))
+
     return answer, citations

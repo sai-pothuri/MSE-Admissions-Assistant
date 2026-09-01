@@ -14,13 +14,13 @@ from app.services.ingestion.embedding import embed_query
 def main() -> None:
     settings = get_settings()
     qdrant = get_qdrant_client()
-    voyage = get_voyage_client()
-
-    vector_size = len(embed_query(voyage, "dimension probe"))
 
     if qdrant.collection_exists(settings.qdrant_collection_prod):
         print(f"Collection '{settings.qdrant_collection_prod}' already exists.")
         return
+
+    voyage = get_voyage_client()
+    vector_size = len(embed_query(voyage, "dimension probe"))
 
     qdrant.create_collection(
         collection_name=settings.qdrant_collection_prod,

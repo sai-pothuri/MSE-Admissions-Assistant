@@ -41,9 +41,13 @@ select = ["E", "F", "I", "UP", "B"]
 python_version = "3.12"
 strict = true
 ignore_missing_imports = true
-# Third-party libs (voyageai, etc.) ship py.typed without following PEP 484's
-# explicit re-export convention internally; strict mode's implicit_reexport
-# check flags their own `from x import Y` style, not anything in our code.
+
+# voyageai ships py.typed without following PEP 484's explicit re-export
+# convention internally, so strict mode's implicit_reexport check flags its
+# own `from x import Y` style. Scoped to voyageai only — first-party app.*
+# code keeps the stricter default.
+[[tool.mypy.overrides]]
+module = ["voyageai", "voyageai.*"]
 implicit_reexport = true
 
 [tool.pytest.ini_options]
