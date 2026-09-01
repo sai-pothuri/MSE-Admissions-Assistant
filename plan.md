@@ -47,6 +47,8 @@ Note: `git init` + first commit is a state-changing action the user runs (or app
 
 **Branch:** `phase-1-ingestion-retrieval-generation`
 
+**Status: done** — [PR #1](https://github.com/sai-pothuri/MSE-Admissions-Assistant/pull/1) open for review. Verified against the real knowledge base (109 chunks indexed); grounded/cited answers on admissions and tuition questions, correct refusal on an out-of-scope question. Notable deviation: the installed Anthropic SDK no longer exposes a `temperature` param, so "low temperature" generation is enforced via the system prompt instead.
+
 **Goal:** prove the core RAG loop end-to-end against the real source documents (handbook, FAQ, two program detail docs — all in `data/knowledge_base/general/`). **No admin console, no guardrails yet** — category is folder-derived as a placeholder, so everything will show up tagged `general` until Phase 2's real per-chunk auto-tagging replaces it; no off-limits check, no confidence gate, no numerical verification. Smallest possible working system.
 
 **Deliverables:** CLI-driven ingestion of the source PDFs into a single Qdrant collection; a `POST /query` endpoint doing unfiltered vector search + Claude generation with citations; manual smoke test proving grounded, cited answers.
