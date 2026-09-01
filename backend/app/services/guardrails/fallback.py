@@ -25,3 +25,16 @@ def verification_failed_response() -> QueryResponse:
         ),
         citations=[],
     )
+
+
+def service_unavailable_response() -> QueryResponse:
+    """Used when the safety-critical pre-classification stage itself fails
+    (e.g. an Anthropic API error) — we can't verify the question is safe to
+    process, so we decline rather than silently proceeding unguarded."""
+    return QueryResponse(
+        answer=(
+            "I'm temporarily unable to process questions — "
+            f"{CONTACT_LINE} Please try again shortly."
+        ),
+        citations=[],
+    )

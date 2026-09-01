@@ -36,3 +36,22 @@ def test_verify_checks_across_multiple_cited_chunks():
     cited_texts = ["Applications close on January 15.", "A $50 application fee applies."]
     result = verify(answer, cited_texts)
     assert result.passed is True
+
+
+def test_verify_rejects_a_truncated_number_embedded_in_a_longer_correct_one():
+    """Regression test: plain substring containment would let "6,250" pass
+    just because it's embedded in the correct "$26,250.00" — the truncated/
+    wrong figure must be rejected, not silently verified."""
+    answer = "Tuition is $6,250 per semester."
+    cited_texts = ["The MSE tuition rate is $26,250.00 per semester."]
+    result = verify(answer, cited_texts)
+    assert result.passed is False
+    assert "$6,250" in result.unverified_numbers
+
+
+def test_verify_rejects_truncated_percentage_embedded_in_a_longer_one():
+    answer = "There is a 5% increase this year."
+    cited_texts = ["Tuition increased 25% compared to last year."]
+    result = verify(answer, cited_texts)
+    assert result.passed is False
+    assert "5%" in result.unverified_numbers

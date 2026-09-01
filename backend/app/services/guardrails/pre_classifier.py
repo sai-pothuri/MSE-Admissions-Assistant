@@ -1,16 +1,12 @@
-from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
 import yaml
 
-from app.clients.anthropic_client import classify, get_anthropic_client
-from app.config.settings import get_settings
+from app.services.classification import ClassifyFn, match_label, resolve_classify_fn
 
 OFFLIMITS_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "offlimits.yaml"
-
-ClassifyFn = Callable[[str], str]
 
 
 @dataclass(frozen=True)
@@ -62,13 +58,6 @@ def _build_system_prompt(config: OffLimitsConfig) -> str:
     )
 
 
-def _default_classify_fn(prompt_text: str, system_prompt: str) -> str:
-    settings = get_settings()
-    return classify(
-        get_anthropic_client(), settings.anthropic_classification_model, system_prompt, prompt_text
-    )
-
-
 def check(
     query: str,
     config: OffLimitsConfig | None = None,
@@ -79,17 +68,16 @@ def check(
     short-circuit and never reach retrieval or generation."""
     resolved_config = config if config is not None else load_offlimits_config()
     system_prompt = _build_system_prompt(resolved_config)
-    resolved_classify_fn = classify_fn or (
-        lambda text: _default_classify_fn(text, system_prompt)
-    )
+    resolved_classify_fn = resolve_classify_fn(classify_fn, system_prompt)
 
-    raw = resolved_classify_fn(query).strip().lower()
-    matched = next((t for t in resolved_config.topics if t.name.lower() == raw), None)
+    raw = resolved_classify_fn(query)
+    topic_names = [t.name for t in resolved_config.topics]
+    matched_name = match_label(raw, topic_names)
 
-    if matched is None:
+    if matched_name is None:
         return PreClassifyResult(allowed=True)
     return PreClassifyResult(
         allowed=False,
-        matched_topic=matched.name,
+        matched_topic=matched_name,
         redirect_message=resolved_config.redirect_message,
     )

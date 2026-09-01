@@ -1,6 +1,8 @@
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from app.services.ingestion import indexer
 from app.services.ingestion.chunking import Chunk
 from app.services.ingestion.pdf_extraction import ExtractedBlock
@@ -52,6 +54,41 @@ def test_index_file_deletes_existing_chunks_for_the_file_before_upserting(monkey
 
     call_order = [call[0] for call in mock_qdrant.method_calls]
     assert call_order.index("delete") < call_order.index("upsert")
+
+
+def test_index_file_preserves_existing_chunks_when_classification_fails_partway(monkeypatch):
+    """Regression test: if classify_chunk raises partway through the
+    per-chunk loop, the file's existing Qdrant chunks must be left intact
+    rather than deleted with nothing ready to replace them."""
+    fake_blocks = [
+        ExtractedBlock(text="First chunk.", page_number=1),
+        ExtractedBlock(text="Second chunk.", page_number=1),
+    ]
+    fake_chunks = [
+        Chunk(text="First chunk.", page_number=1),
+        Chunk(text="Second chunk.", page_number=1),
+    ]
+    mock_qdrant = MagicMock()
+
+    def failing_classify_chunk(text: str) -> str:
+        if text == "Second chunk.":
+            raise RuntimeError("classification API error")
+        return "admissions"
+
+    monkeypatch.setattr(indexer, "extract_blocks", lambda path: fake_blocks)
+    monkeypatch.setattr(indexer, "chunk_blocks", lambda blocks: fake_chunks)
+    monkeypatch.setattr(
+        indexer, "embed_documents", lambda client, texts: [[0.1, 0.2], [0.3, 0.4]]
+    )
+    monkeypatch.setattr(indexer, "classify_chunk", failing_classify_chunk)
+    monkeypatch.setattr(indexer, "get_qdrant_client", lambda: mock_qdrant)
+    monkeypatch.setattr(indexer, "get_voyage_client", lambda: MagicMock())
+
+    with pytest.raises(RuntimeError):
+        indexer.index_file(Path("data/knowledge_base/general/handbook.pdf"))
+
+    mock_qdrant.delete.assert_not_called()
+    mock_qdrant.upsert.assert_not_called()
 
 
 def test_index_file_returns_zero_for_empty_document(monkeypatch):

@@ -2,6 +2,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from qdrant_client import QdrantClient
 from qdrant_client.models import FieldCondition, Filter, FilterSelector, MatchValue, PointStruct
 
 from app.clients.qdrant_client import get_qdrant_client
@@ -20,30 +21,38 @@ class IndexResult:
     error: str | None = None
 
 
+def _delete_existing_chunks(qdrant: QdrantClient, collection: str, source_file: str) -> None:
+    qdrant.delete(
+        collection_name=collection,
+        points_selector=FilterSelector(
+            filter=Filter(
+                must=[FieldCondition(key="source_file", match=MatchValue(value=source_file))]
+            )
+        ),
+    )
+
+
 def index_file(pdf_path: Path) -> int:
-    """Extract, chunk, auto-tag, embed, and upsert a single PDF. Each
+    """Extract, chunk, embed, auto-tag, and upsert a single PDF. Each
     chunk's category is independently classified by Claude (one call per
     chunk, per CLAUDE.md) rather than inherited from the source file's
     folder — a single document can genuinely span multiple categories.
 
     Re-indexing a file fully replaces its existing chunks (delete by
-    source_file, then re-upsert) so repeated runs stay idempotent."""
+    source_file, then re-upsert), but the delete only happens once the new
+    chunks are fully prepared (embedded and classified) — if per-chunk
+    classification fails partway through, the file's existing chunks are
+    left untouched rather than being wiped with nothing to replace them."""
     settings = get_settings()
     qdrant = get_qdrant_client()
     voyage = get_voyage_client()
 
-    qdrant.delete(
-        collection_name=settings.qdrant_collection_prod,
-        points_selector=FilterSelector(
-            filter=Filter(
-                must=[FieldCondition(key="source_file", match=MatchValue(value=pdf_path.name))]
-            )
-        ),
-    )
-
     blocks = extract_blocks(pdf_path)
     chunks = chunk_blocks(blocks)
     if not chunks:
+        # A genuinely empty re-extraction (not a mid-process failure) —
+        # reflect that the file now has no content.
+        _delete_existing_chunks(qdrant, settings.qdrant_collection_prod, pdf_path.name)
         return 0
 
     embeddings = embed_documents(voyage, [chunk.text for chunk in chunks])
@@ -64,6 +73,7 @@ def index_file(pdf_path: Path) -> int:
         for chunk, embedding, category in zip(chunks, embeddings, categories, strict=True)
     ]
 
+    _delete_existing_chunks(qdrant, settings.qdrant_collection_prod, pdf_path.name)
     qdrant.upsert(collection_name=settings.qdrant_collection_prod, points=points)
     return len(points)
 
