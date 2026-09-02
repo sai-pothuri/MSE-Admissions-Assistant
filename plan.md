@@ -47,7 +47,7 @@ Note: `git init` + first commit is a state-changing action the user runs (or app
 
 **Branch:** `phase-1-ingestion-retrieval-generation`
 
-**Status: done** — [PR #1](https://github.com/sai-pothuri/MSE-Admissions-Assistant/pull/1) open for review. Verified against the real knowledge base (109 chunks indexed); grounded/cited answers on admissions and tuition questions, correct refusal on an out-of-scope question. Notable deviation: the installed Anthropic SDK no longer exposes a `temperature` param, so "low temperature" generation is enforced via the system prompt instead.
+**Status: done** — [PR #1](https://github.com/sai-pothuri/MSE-Admissions-Assistant/pull/1) merged to `main`. Verified against the real knowledge base (109 chunks indexed); grounded/cited answers on admissions and tuition questions, correct refusal on an out-of-scope question. Notable deviation: the installed Anthropic SDK no longer exposes a `temperature` param, so "low temperature" generation is enforced via the system prompt instead.
 
 **Goal:** prove the core RAG loop end-to-end against the real source documents (handbook, FAQ, two program detail docs — all in `data/knowledge_base/general/`). **No admin console, no guardrails yet** — category is folder-derived as a placeholder, so everything will show up tagged `general` until Phase 2's real per-chunk auto-tagging replaces it; no off-limits check, no confidence gate, no numerical verification. Smallest possible working system.
 
@@ -98,7 +98,17 @@ backend/tests/integration/test_query_endpoint.py
 
 **Branch:** `phase-2-guardrails`
 
-**Status: done** — [PR #2](https://github.com/sai-pothuri/MSE-Admissions-Assistant/pull/2) open for review. Verified against the real knowledge base: re-ingestion auto-tagged 109 chunks; live smoke tests confirmed off-limits redirects (admissions predictions, visa advice, faculty commentary) short-circuit before retrieval, category-filtered retrieval returns grounded answers, the confidence gate declines an out-of-scope-but-not-off-limits question without calling generation, and numerical verification passes real tuition figures. Confidence thresholds are provisional (picked from a handful of real similarity scores), to be properly calibrated in Phase 3.
+**Status: done** — [PR #2](https://github.com/sai-pothuri/MSE-Admissions-Assistant/pull/2) merged to `main`. Verified against the real knowledge base: re-ingestion auto-tagged 109 chunks; live smoke tests confirmed off-limits redirects (admissions predictions, visa advice, faculty commentary) short-circuit before retrieval, category-filtered retrieval returns grounded answers, the confidence gate declines an out-of-scope-but-not-off-limits question without calling generation, and numerical verification passes real tuition figures.
+
+A code review surfaced 10 findings on this PR; 9 were fixed in a follow-up commit before merge (the 10th — the uncalibrated confidence threshold — was deliberately left as-is, since guessing a different placeholder isn't a fix; Phase 3's eval harness sets the real value). The fixes changed the architecture in ways later phases should know about:
+- `app/services/query_pipeline.py` now falls back to an **unfiltered search** when a category-filtered search returns nothing (covers both the near-empty `"other"` bucket and genuine misclassification into the wrong category).
+- Pre-classification and query-category classification now run **concurrently** (independent Claude calls), each with its own failure handling: a pre-classification API error declines the request outright (it's the safety-critical stage), a category-classification API error degrades to unfiltered search rather than failing the request.
+- Numerical verification now checks the generated answer against **everything retrieved** (`results`), not just the subset a citation-display heuristic detects as "referenced" — that heuristic undercounted evidence for paraphrased answers.
+- A new shared module, `app/services/classification.py`, consolidates the `classify_fn` dependency-injection pattern and provides word-boundary-aware label matching (`match_label`) — used by `pre_classifier.py`, `query_classifier.py`, and `auto_tagging.py` so a future change to the classification call only needs to happen once.
+- `numerical_verification.py`'s number matching requires word boundaries, so a truncated/wrong figure can't pass just by being embedded in a longer correct one.
+- `indexer.py` now prepares (embeds + classifies) a file's new chunks fully before deleting its old ones, so a mid-loop classification failure leaves existing data intact instead of wiping it.
+
+Confidence thresholds (`backend/app/config/thresholds.py`, currently `min_top1_score=0.35`, `min_score_gap=0.0`) remain provisional placeholders — this is exactly what Phase 3 calibrates.
 
 **Goal:** wrap Phase 1 with the guardrails that are the actual engineering value-add of this project, each independently unit-testable.
 
@@ -108,24 +118,28 @@ backend/tests/integration/test_query_endpoint.py
 backend/app/config/taxonomy.py             # CATEGORIES = admissions, curriculum, tuition, deadlines, faculty, other
 backend/app/config/offlimits.yaml           # explicit, editable off-limits topics + example phrasings + redirect copy
 backend/app/config/thresholds.py             # confidence_threshold, score_gap_threshold, top_k, numerical-verification category list
+backend/app/services/classification.py        # shared classify_fn DI + word-boundary label matching (added in review fixes)
+backend/app/services/query_pipeline.py           # orchestrates the full guardrail sequence for POST /query (added in review fixes)
 backend/app/services/ingestion/auto_tagging.py    # Claude Haiku, one call per chunk
 backend/app/services/guardrails/pre_classifier.py     # off-limits check, runs BEFORE retrieval (Claude Haiku)
 backend/app/services/guardrails/query_classifier.py    # category classification for Qdrant filter (Claude Haiku)
 backend/app/services/guardrails/confidence_gate.py       # top-1 score + score gap vs threshold
-backend/app/services/guardrails/numerical_verification.py  # extract numbers from answer, verify literal match in cited chunk text
+backend/app/services/guardrails/numerical_verification.py  # extract numbers from answer, verify whole-number match in cited chunk text
 backend/app/services/guardrails/fallback.py                 # fallback/decline response builder
 backend/tests/unit/test_pre_classifier.py
 backend/tests/unit/test_query_classifier.py
 backend/tests/unit/test_confidence_gate.py
 backend/tests/unit/test_numerical_verification.py
 backend/tests/unit/test_auto_tagging.py
+backend/tests/unit/test_classification.py
+backend/tests/unit/test_query_pipeline.py
 ```
 
-`/query` calls these stages in sequence, short-circuiting on pre-classifier rejection or confidence-gate failure (generation model is never called in those cases, per spec).
+`app/services/query_pipeline.py`'s `answer_query()` runs these stages in sequence (pre-classify and query classification run concurrently as of the review fixes), short-circuiting on pre-classifier rejection or confidence-gate failure (generation model is never called in those cases, per spec). `POST /query` is a thin wrapper around it.
 
-**Testability pattern:** guardrail functions take explicit typed config/values as arguments rather than reaching into global config internally, e.g. `confidence_gate.evaluate(top1_score: float, score_gap: float, config: ConfidenceConfig) -> GateResult` — tests pass synthetic scores, no network calls needed. Same pattern for `pre_classifier.check(query, offlimits_config, classify_fn)` so the Claude call is injectable/mockable.
+**Testability pattern:** guardrail functions take explicit typed config/values as arguments rather than reaching into global config internally, e.g. `confidence_gate.evaluate(top1_score: float, score_gap: float, config: ConfidenceConfig) -> GateResult` — tests pass synthetic scores, no network calls needed. Same pattern for `pre_classifier.check(query, offlimits_config, classify_fn)` so the Claude call is injectable/mockable. The `classify_fn` DI pattern itself (plus label-matching) is factored into the shared `app/services/classification.py` rather than duplicated per guardrail.
 
-**Numerical verification approach:** regex-based number extraction (currency, percentages, dates) with literal substring matching against cited chunk text — no semantic normalization (e.g. "$50,000" won't match "fifty thousand"). Flagging this as the practical, low-complexity default; can be revisited if false positives show up in eval.
+**Numerical verification approach:** regex-based number extraction (currency, percentages, dates) with whole-number matching against cited chunk text (word-boundary anchored, so a truncated number like "6,250" can't pass just by being embedded in a correct "$26,250.00") — no semantic normalization (e.g. "$50,000" won't match "fifty thousand"). Flagging this as the practical, low-complexity default; can be revisited if false positives show up in eval.
 
 ---
 
