@@ -150,6 +150,40 @@ def test_answer_query_prefers_unfiltered_search_when_it_scores_higher_than_filte
     assert trace.results == [right_category_result]
 
 
+def test_answer_query_runs_numerical_verification_on_fallback_results_despite_stale_category(
+    monkeypatch,
+):
+    """Regression test: a query misclassified into a non-high-stakes
+    category (e.g. "faculty") whose unfiltered-fallback results actually
+    land in "tuition" must still run numerical verification — gating on
+    the classified `category` instead of the actual result categories
+    would silently skip it."""
+    monkeypatch.setattr(query_pipeline, "pre_classify", lambda q: PreClassifyResult(allowed=True))
+    monkeypatch.setattr(
+        query_pipeline, "classify_query", lambda q: QueryClassifyResult(category="faculty")
+    )
+    faculty_result = _result(category="faculty", text="Irrelevant faculty chunk.")
+    faculty_result.score = 0.4
+    tuition_result = _result(category="tuition", text="The MSE tuition rate is $26,250.00.")
+    tuition_result.score = 0.6
+
+    def fake_search(q, category=None, query_vector=None):
+        return [faculty_result] if category == "faculty" else [tuition_result]
+
+    monkeypatch.setattr(query_pipeline, "search", fake_search)
+    _set_gate(monkeypatch, passed=True)
+    _set_generate_answer(monkeypatch, "Tuition is $99,999.")
+    monkeypatch.setattr(
+        query_pipeline.numerical_verification,
+        "verify",
+        lambda answer, texts: MagicMock(passed=False),
+    )
+
+    response = query_pipeline.answer_query("What's the tuition?")
+
+    assert "couldn't verify" in response.answer
+
+
 def test_answer_query_returns_low_confidence_fallback_when_no_results(monkeypatch):
     monkeypatch.setattr(query_pipeline, "pre_classify", lambda q: PreClassifyResult(allowed=True))
     monkeypatch.setattr(

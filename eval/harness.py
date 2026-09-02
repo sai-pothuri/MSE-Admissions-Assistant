@@ -39,12 +39,6 @@ DATA_DIR = REPO_ROOT / "data" / "knowledge_base"
 INVOCATION_CWD = Path.cwd()
 
 sys.path.insert(0, str(BACKEND_DIR))
-# app.config.settings.Settings loads backend/.env via a path relative to the
-# process cwd (matching how app/scripts/ingest.py etc. are already run from
-# `backend/`) — chdir here so this script works from any invocation cwd.
-# CLI-supplied paths (--questions/--out) are resolved against
-# INVOCATION_CWD, captured above, before this takes effect.
-os.chdir(BACKEND_DIR)
 
 from app.clients.anthropic_client import get_anthropic_client  # noqa: E402
 from app.config.settings import get_settings  # noqa: E402
@@ -204,6 +198,19 @@ def run_question(reference_text: str, q: dict[str, Any]) -> dict[str, Any]:
     )
 
     if q["expected_behavior"] == "decline":
+        if trace.stage == "service_unavailable":
+            # An Anthropic API failure during pre-classification, not a
+            # guardrail decision — scoring this a pass would hide a real
+            # outage behind an inflated decline-side pass rate (answer-type
+            # questions hit in the same window are correctly scored as
+            # failures, so this stage must not get a free pass either).
+            record.update(
+                judged_correct=None,
+                judge_reasoning=None,
+                passed=False,
+                error="service_unavailable: pre-classification API error, not a guardrail decision",
+            )
+            return record
         if not answered:
             # The guardrail short-circuited deterministically (pre-classify,
             # confidence gate, or verification) — correct by construction,
@@ -273,6 +280,15 @@ def _resolve_cli_path(path_str: str) -> Path:
 
 
 def main() -> None:
+    # app.config.settings.Settings loads backend/.env via a path relative to
+    # the process cwd (matching how app/scripts/ingest.py etc. are already
+    # run from `backend/`) — chdir here (not at module level) so this
+    # script works from any invocation cwd while staying import-safe for
+    # tests, which never reach a real Settings() call. CLI-supplied paths
+    # (--questions/--out) are resolved against INVOCATION_CWD, captured at
+    # module load before this runs.
+    os.chdir(BACKEND_DIR)
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--questions", default=str(EVAL_DIR / "questions.jsonl"))
     parser.add_argument("--limit", type=int, default=None)

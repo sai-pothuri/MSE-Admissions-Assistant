@@ -66,6 +66,27 @@ def _classify(question: str) -> tuple[PreClassifyResult, str | None]:
     return pre_result, category
 
 
+def _search_best(question: str, category: str, query_vector: list[float]) -> list[SearchResult]:
+    """Runs the category-filtered and unfiltered searches concurrently
+    (independent Qdrant lookups sharing one precomputed `query_vector`) and
+    keeps whichever scores higher — see `answer_query_traced` for why a
+    non-empty filtered result isn't proof it's the *right* one."""
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        filtered_future = executor.submit(
+            search, question, category=category, query_vector=query_vector
+        )
+        unfiltered_future = executor.submit(
+            search, question, category=None, query_vector=query_vector
+        )
+        filtered_results = filtered_future.result()
+        unfiltered_results = unfiltered_future.result()
+
+    filtered_top1 = top1_and_gap(filtered_results)[0] if filtered_results else 0.0
+    if unfiltered_results and top1_and_gap(unfiltered_results)[0] > filtered_top1:
+        return unfiltered_results
+    return filtered_results
+
+
 def answer_query(question: str) -> QueryResponse:
     """The full per-query guardrail pipeline: pre-classify -> classify
     category -> filtered search (falling back to unfiltered if the filter
@@ -111,7 +132,6 @@ def answer_query_traced(question: str) -> tuple[QueryResponse, PipelineTrace]:
         return fallback.off_limits_response(pre_result.redirect_message), trace
 
     query_vector = embed(question)
-    results = search(question, category=category, query_vector=query_vector)
     if category is not None:
         # The classified category may be a poor fit (e.g. "other", or a
         # genuine misclassification) — an empty filtered search is the
@@ -120,13 +140,13 @@ def answer_query_traced(question: str) -> tuple[QueryResponse, PipelineTrace]:
         # scoring fine on their own terms while missing the actually
         # relevant content). So always check unfiltered too and keep
         # whichever has the higher top1 score, rather than only falling
-        # back when the filter returns nothing. Reusing `query_vector`
-        # means this costs one extra (cheap, local) Qdrant lookup, not a
-        # second Voyage embedding call.
-        filtered_top1 = top1_and_gap(results)[0] if results else 0.0
-        unfiltered_results = search(question, category=None, query_vector=query_vector)
-        if unfiltered_results and top1_and_gap(unfiltered_results)[0] > filtered_top1:
-            results = unfiltered_results
+        # back when the filter returns nothing. `_search_best` reuses
+        # `query_vector` (one Voyage call, not two) and runs both Qdrant
+        # lookups concurrently (they're independent, same pattern as
+        # `_classify` above).
+        results = _search_best(question, category, query_vector)
+    else:
+        results = search(question, category=None, query_vector=query_vector)
 
     if not results:
         trace = PipelineTrace(
@@ -154,7 +174,14 @@ def answer_query_traced(question: str) -> tuple[QueryResponse, PipelineTrace]:
 
     answer, citations = generate_answer(get_anthropic_client(), question, results)
 
-    if category in NUMERICAL_VERIFICATION_CATEGORIES:
+    # Gate on the actual category of the chunks the answer was generated
+    # from, not the (possibly stale) classified query `category` — the
+    # unfiltered-fallback above can swap `results` in from a different
+    # category than the one that was classified, and a query
+    # misclassified away from "tuition"/"deadlines" must not skip
+    # numerical verification just because its retrieved content did.
+    result_categories = {r.chunk.category for r in results}
+    if result_categories & NUMERICAL_VERIFICATION_CATEGORIES:
         # Verify against everything the model was actually given as
         # context, not just the subset a citation-display heuristic
         # detects as "referenced" — a correct answer that paraphrases its
