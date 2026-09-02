@@ -5,7 +5,20 @@ from dataclasses import dataclass
 # separators/decimals) — covers the numeric formats that show up in tuition
 # and deadline content. Deliberately literal: no normalization ("$50,000"
 # won't match "fifty thousand"), per the low-complexity default in plan.md.
-NUMBER_PATTERN = re.compile(r"\$?\d[\d,]*(?:\.\d+)?%?")
+# The thousands-grouped alternative requires each comma to be followed by
+# exactly 3 digits — a loose `[\d,]*` char class would also swallow a
+# trailing comma that's just punctuation (e.g. extracting "$7,500," instead
+# of "$7,500" from "...worth $7,500, not $10,000", which then fails to
+# match the source text's "$7,500" and false-positives the whole answer).
+NUMBER_PATTERN = re.compile(r"\$?\d{1,3}(?:,\d{3})+(?:\.\d+)?%?|\$?\d+(?:\.\d+)?%?")
+
+# The model is instructed to cite "(Source: file, page N)" — page numbers
+# are citation metadata, not factual claims, and won't literally appear in
+# the cited chunk's body text, so the whole parenthetical citation must be
+# excluded before extraction (not just the page number) — a source
+# filename can itself contain a digit (e.g. "SCS_S3D_MSE.pdf"), which would
+# otherwise leak through as an "unverified number" too.
+PAGE_CITATION_PATTERN = re.compile(r"\([^()]*\bpages?\s+\d+(?:\s*,\s*\d+)*[^()]*\)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -15,7 +28,8 @@ class VerificationResult:
 
 
 def extract_numbers(text: str) -> list[str]:
-    return NUMBER_PATTERN.findall(text)
+    text_without_page_citations = PAGE_CITATION_PATTERN.sub("", text)
+    return NUMBER_PATTERN.findall(text_without_page_citations)
 
 
 def _appears_as_whole_number(number: str, source: str) -> bool:

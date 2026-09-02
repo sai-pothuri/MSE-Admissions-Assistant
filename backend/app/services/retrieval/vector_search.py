@@ -20,10 +20,19 @@ class SearchResult:
     score: float
 
 
-def search(question: str, category: str | None = None) -> list[SearchResult]:
+def embed(question: str) -> list[float]:
+    return embed_query(get_voyage_client(), question)
+
+
+def search(
+    question: str, category: str | None = None, query_vector: list[float] | None = None
+) -> list[SearchResult]:
+    """`query_vector` lets a caller that needs both a filtered and an
+    unfiltered search for the same question (see `query_pipeline`) embed
+    the question once via `embed()` and reuse it, instead of paying for a
+    Voyage embedding call on every `search()` invocation."""
     settings = get_settings()
     qdrant = get_qdrant_client()
-    voyage = get_voyage_client()
 
     if not qdrant.collection_exists(settings.qdrant_collection_prod):
         raise CollectionNotReadyError(
@@ -31,7 +40,8 @@ def search(question: str, category: str | None = None) -> list[SearchResult]:
             "Run `python -m app.scripts.init_collection` and ingest documents first."
         )
 
-    query_vector = embed_query(voyage, question)
+    if query_vector is None:
+        query_vector = embed(question)
     query_filter = (
         Filter(must=[FieldCondition(key="category", match=MatchValue(value=category))])
         if category is not None

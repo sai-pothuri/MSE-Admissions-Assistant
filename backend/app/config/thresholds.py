@@ -7,13 +7,31 @@ class ConfidenceConfig:
     min_score_gap: float
 
 
-# PROVISIONAL defaults, not yet calibrated against the eval set (Phase 3).
-# Picked from a handful of real queries against the live knowledge base:
-# clearly relevant questions scored top-1 ~0.45-0.60, clearly irrelevant
-# ones ~0.19-0.33. min_score_gap is left permissive (effectively a no-op)
-# since 4 samples aren't enough to calibrate a secondary signal — Phase 3's
-# eval harness sets the real values for both.
-CONFIDENCE = ConfidenceConfig(min_top1_score=0.35, min_score_gap=0.0)
+# Calibrated in Phase 3 against the 76-question eval set (eval/questions.jsonl)
+# via `eval/calibrate_threshold.py`, sweeping every observed top1_score/
+# score_gap value against each question's expected answer/decline label.
+#
+# min_top1_score=0.40: the should-answer and should-decline score
+# distributions substantially overlap in this corpus (the lowest
+# should-answer score, ~0.40, sits below several should-decline scores in
+# the ~0.43-0.62 range) — no threshold gets both false positives and false
+# negatives to zero. 0.40 is the highest threshold that still keeps false
+# negatives at zero (every genuinely answerable eval question clears it),
+# chosen deliberately over the sweep's raw-accuracy-maximizing value
+# (~0.43, which trades one blocked answerable question for a few fewer
+# gate-passes). Reasoning: a blocked question has no fallback — the user
+# just gets a decline. A gate false-positive does have a fallback — the
+# generation system prompt's own "if the context doesn't clearly support
+# an answer, say so explicitly" instruction, which the eval observed
+# reliably catching out-of-scope questions that made it past the gate.
+# So minimizing false negatives is the higher-value target here.
+#
+# min_score_gap=0.0 (unchanged/no-op): calibrated separately and it does
+# not separate the two classes as well as top1_score alone (best accuracy
+# ~68% vs. top1's ~84%) — adopting a non-zero cutoff here would only add a
+# second tunable knob that trades away answerable questions for no
+# real gain.
+CONFIDENCE = ConfidenceConfig(min_top1_score=0.40, min_score_gap=0.0)
 
 TOP_K = 5
 
