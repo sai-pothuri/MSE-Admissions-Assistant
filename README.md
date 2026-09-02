@@ -4,9 +4,20 @@ RAG-based chatbot answering prospective student questions for CMU's Master of So
 
 ## Status
 
-Phase 2 — guardrail layer. The `/query` pipeline now runs: pre-classification (off-limits topic check) → query category classification → category-filtered retrieval → confidence gate → generation → numerical verification (tuition/deadlines only). Ingestion auto-tags each chunk's category via Claude rather than inheriting it from the source folder. No admin console or eval harness yet (see `plan.md`).
+Phase 3 — eval harness & threshold calibration. The `/query` pipeline runs: pre-classification (off-limits topic check) → query category classification → category-filtered retrieval (falling back to unfiltered whenever it scores higher, not only when the filter returns nothing) → confidence gate → generation → numerical verification (tuition/deadlines only). Ingestion auto-tags each chunk's category via Claude rather than inheriting it from the source folder. No admin console yet (see `plan.md`).
 
-Guardrail config lives in `backend/app/config/`: category taxonomy (`taxonomy.py`), off-limits topics (`offlimits.yaml`, edit without touching code), and thresholds (`thresholds.py` — confidence gate cutoffs are provisional pending Phase 3's eval-based calibration).
+Guardrail config lives in `backend/app/config/`: category taxonomy (`taxonomy.py`), off-limits topics (`offlimits.yaml`, edit without touching code), and thresholds (`thresholds.py` — `min_top1_score=0.40`, calibrated against the eval set in Phase 3; see `plan.md` for the reasoning).
+
+## Evaluation
+
+`eval/questions.jsonl` holds 76 questions spanning normal, out-of-scope, injection, numerical-trap, ambiguous, off-limits-disguised, adversarial, and format-breaking cases, grounded in the real source PDFs. Run it against a live stack (Qdrant populated, API keys set):
+
+```
+python eval/harness.py                        # runs every question, writes eval/results/
+python eval/calibrate_threshold.py             # sweeps confidence-gate thresholds against a harness run
+```
+
+Every guardrail/prompt/threshold change should be re-checked against this set before being considered done, per `CLAUDE.md`.
 
 ## Local development setup
 

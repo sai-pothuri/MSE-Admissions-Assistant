@@ -55,3 +55,42 @@ def test_verify_rejects_truncated_percentage_embedded_in_a_longer_one():
     result = verify(answer, cited_texts)
     assert result.passed is False
     assert "5%" in result.unverified_numbers
+
+
+def test_extract_numbers_does_not_swallow_a_trailing_comma():
+    """Regression test: '$7,500, not $10,000' must extract '$7,500' and
+    '$10,000' separately, not '$7,500,' with the punctuation comma baked
+    into the number — the corrupted token would never match the source
+    text's clean '$7,500', false-positiving a correct answer."""
+    numbers = extract_numbers("It's worth $7,500, not $10,000.")
+    assert "$7,500" in numbers
+    assert "$10,000" in numbers
+    assert "$7,500," not in numbers
+
+
+def test_verify_passes_when_number_is_followed_by_a_comma_in_the_answer():
+    answer = "The scholarship is worth $7,500, not the figure you mentioned."
+    cited_texts = ["Director's Scholarships are awarded for $7,500 each."]
+    result = verify(answer, cited_texts)
+    assert result.passed is True
+
+
+def test_extract_numbers_ignores_page_citation_numbers():
+    """Regression test: a page number cited as '(Source: file, page 12)' is
+    citation metadata, not a factual claim — it won't appear in the cited
+    chunk's body text and must not be treated as an unverified fact."""
+    numbers = extract_numbers("The rate is $7,500 (Source: FAQ.pdf, page 12).")
+    assert "$7,500" in numbers
+    assert "12" not in numbers
+
+
+def test_extract_numbers_ignores_multiple_page_citation_numbers():
+    numbers = extract_numbers("Contacts are listed (SCS_S3D_MSE.pdf, pages 9, 49, 50).")
+    assert numbers == []
+
+
+def test_verify_passes_when_only_number_present_is_a_page_citation():
+    answer = "Marlana Ivey handles admissions (SCS_S3D_MSE.pdf, page 9)."
+    cited_texts = ["Marlana Ivey is the Senior Admissions Officer."]
+    result = verify(answer, cited_texts)
+    assert result.passed is True

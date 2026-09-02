@@ -14,5 +14,9 @@ __pycache__/
 node_modules/
 dist/
 
+# Eval run output (regenerate via `python eval/harness.py`; findings are
+# summarized in plan.md / README instead of committing raw run artifacts)
+eval/results/
+
 # OS
 .DS_Store
