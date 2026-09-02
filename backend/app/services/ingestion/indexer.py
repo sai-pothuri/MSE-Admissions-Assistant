@@ -32,11 +32,15 @@ def _delete_existing_chunks(qdrant: QdrantClient, collection: str, source_file: 
     )
 
 
-def index_file(pdf_path: Path) -> int:
+def index_file(pdf_path: Path, collection: str | None = None) -> int:
     """Extract, chunk, embed, auto-tag, and upsert a single PDF. Each
     chunk's category is independently classified by Claude (one call per
     chunk, per CLAUDE.md) rather than inherited from the source file's
     folder — a single document can genuinely span multiple categories.
+
+    `collection` defaults to the production collection (the CLI ingestion
+    script's behavior); the admin console (Phase 4) passes the staging
+    collection explicitly so uploads land there first, not live.
 
     Re-indexing a file fully replaces its existing chunks (delete by
     source_file, then re-upsert), but the delete only happens once the new
@@ -44,6 +48,7 @@ def index_file(pdf_path: Path) -> int:
     classification fails partway through, the file's existing chunks are
     left untouched rather than being wiped with nothing to replace them."""
     settings = get_settings()
+    resolved_collection = collection or settings.qdrant_collection_prod
     qdrant = get_qdrant_client()
     voyage = get_voyage_client()
 
@@ -52,7 +57,7 @@ def index_file(pdf_path: Path) -> int:
     if not chunks:
         # A genuinely empty re-extraction (not a mid-process failure) —
         # reflect that the file now has no content.
-        _delete_existing_chunks(qdrant, settings.qdrant_collection_prod, pdf_path.name)
+        _delete_existing_chunks(qdrant, resolved_collection, pdf_path.name)
         return 0
 
     embeddings = embed_documents(voyage, [chunk.text for chunk in chunks])
@@ -73,12 +78,12 @@ def index_file(pdf_path: Path) -> int:
         for chunk, embedding, category in zip(chunks, embeddings, categories, strict=True)
     ]
 
-    _delete_existing_chunks(qdrant, settings.qdrant_collection_prod, pdf_path.name)
-    qdrant.upsert(collection_name=settings.qdrant_collection_prod, points=points)
+    _delete_existing_chunks(qdrant, resolved_collection, pdf_path.name)
+    qdrant.upsert(collection_name=resolved_collection, points=points)
     return len(points)
 
 
-def index_directory(root: Path) -> dict[str, IndexResult]:
+def index_directory(root: Path, collection: str | None = None) -> dict[str, IndexResult]:
     """Index every PDF found under `root` (recursively), sequentially —
     the corpus is small enough that async/batch processing isn't warranted.
     A failure on one file is captured and skipped rather than aborting the
@@ -86,7 +91,7 @@ def index_directory(root: Path) -> dict[str, IndexResult]:
     results: dict[str, IndexResult] = {}
     for pdf_path in sorted(root.rglob("*.pdf")):
         try:
-            results[str(pdf_path)] = IndexResult(chunk_count=index_file(pdf_path))
+            results[str(pdf_path)] = IndexResult(chunk_count=index_file(pdf_path, collection))
         except Exception as exc:  # noqa: BLE001 - report and continue, don't abort the batch
             results[str(pdf_path)] = IndexResult(chunk_count=0, error=str(exc))
     return results

@@ -178,30 +178,36 @@ Scoring approach: manual expected-behavior labels drive pass/fail for decline-ty
 
 **Branch:** `phase-4-admin-console-backend`
 
+**Status: done** — 123/123 backend tests pass (36 new), ruff/mypy clean. Verified against the real stack: `list_chunks` and `chunk_preview` (real Claude auto-tagging calls) run against the live 109-chunk `mse_kb_prod` corpus, and the full staging→promote→cleanup round trip was exercised against the live Qdrant instance with a synthetic point (cleaned up afterward, including reverting one stray git commit the smoke test created in the real repo history via `manual_edit_log` — a reminder that git-committing service functions must never be smoke-tested against their real-repo defaults, only through unit tests against a disposable `tmp_path` repo).
+
 **Goal:** git-backed file management, chunk preview/re-tag, staging/promotion, edit log, re-indexing, and the swappable auth module — all server-side, no UI yet.
 
 ```
-backend/app/services/admin/file_manager.py     # upload/replace/delete + git commit per change
-backend/app/services/admin/git_log.py            # parses git history into structured edit-log entries
-backend/app/services/admin/manual_edit_log.py      # supplemental log for Qdrant-only changes (re-tags, promotions)
-backend/app/services/admin/chunk_preview.py           # dry-run extract+chunk+auto-tag, no upsert
-backend/app/services/admin/retag.py                      # in-place Qdrant payload update, auto_tagged: false
-backend/app/services/admin/staging.py                      # promotion: staging collection → prod collection
-backend/app/services/admin/reindex.py                        # delete-by-source_file, re-ingest; warns if manual corrections exist
-backend/app/auth/base.py                                     # AuthProvider interface: authenticate, create_session, validate_session
-backend/app/auth/password_auth.py                               # current implementation
-backend/app/auth/session.py
+backend/app/services/admin/git_utils.py         # shared: REPO_ROOT/KNOWLEDGE_BASE_DIR, run_git, commit_paths (never `git add -A`)
+backend/app/services/admin/file_manager.py        # upload/replace/delete + git commit per change
+backend/app/services/admin/git_log.py               # parses git history into structured edit-log entries
+backend/app/services/admin/manual_edit_log.py          # supplemental git-tracked log for Qdrant-only changes (re-tags, promotions)
+backend/app/services/admin/chunk_preview.py               # dry-run extract+chunk+auto-tag, no embed/upsert
+backend/app/services/admin/retag.py                          # list_chunks / retag_chunk (in-place payload update) / delete_chunks
+backend/app/services/admin/staging.py                          # promote_file: copies staging → prod, clears staging
+backend/app/services/admin/reindex.py                            # check_reindex_warning / reindex_file (raises if unconfirmed)
+backend/app/auth/base.py                                         # AuthProvider interface: authenticate, create_session, validate_session
+backend/app/auth/session.py                                         # itsdangerous-backed signed session tokens (no server-side store)
+backend/app/auth/password_auth.py                                      # current implementation + get_auth_provider() factory
 backend/app/api/routes/{admin_auth,admin_files,admin_chunks,admin_staging}.py
-backend/app/api/deps.py                                              # current_user dependency wrapping AuthProvider
-backend/tests/unit/test_reindex_warning.py
-backend/tests/integration/test_admin_upload_flow.py
+backend/app/api/deps.py                                                    # current_user dependency wrapping AuthProvider
+backend/tests/unit/test_{auth,git_utils,file_manager,git_log,manual_edit_log,chunk_preview,retag,staging,reindex_warning}.py
+backend/tests/integration/test_admin_{auth,upload_flow}.py
 ```
 
 Key design points:
-- **Staging vs prod**: two Qdrant collections (`mse_kb_staging`, `mse_kb_prod`); ingestion targets staging by default, promotion endpoint copies/moves points.
-- **Auth boundary**: every admin route depends on `AuthProvider` via FastAPI dependency injection, never calls `password_auth` directly — swapping to CMU SSO later means replacing one module + rewiring one dependency, not touching route handlers. Password auth is a single shared faculty password for now (matches CLAUDE.md's "simple password auth"), sessions via signed cookie.
-- **Git commit message format**: structured, parseable trailer format per change, e.g. `[admissions] upload: fall2026-requirements.pdf` with a trailer block (`Action:`, `Category:`, `File:`) so `git_log.py` can parse it reliably rather than pattern-matching free text.
-- **Re-index warning**: before deleting old chunks, check if any had `auto_tagged: false`; if so, surface a clear warning (via API response the frontend renders as a confirm modal) before proceeding.
+- **Staging vs prod**: two Qdrant collections (`mse_kb_staging`, `mse_kb_prod`); `POST /admin/files/upload` always indexes into staging, never straight to prod — `POST /admin/staging/promote/{filename}` copies that file's chunks to prod (delete-then-upsert, same semantics as re-indexing) and clears them from staging.
+- **Auth**: `itsdangerous`-signed session cookies (stateless, no server-side session store) rather than hand-rolled HMAC — auth/session-signing is exactly the code where reaching for a small, well-vetted, purpose-built library beats rolling it. Every admin route depends on `AuthProvider` (`app/api/deps.py`'s `current_user`) via FastAPI dependency injection, never on `PasswordAuthProvider` directly — swapping to CMU SSO later means adding a new provider module and changing what `password_auth.get_auth_provider()` returns, not touching route handlers. Session cookies are `secure=False` for now (local dev / no HTTPS yet) — flagged as a Phase 7 hardening item once there's a real deployment behind HTTPS.
+- **Git commit message format**: structured, parseable trailer block (`Action:`, `File:`) on every file-level commit, e.g. `[upload] handbook.pdf` with `Action: upload` / `File: handbook.pdf`. No `[category]`/`Category:` trailer — the "Source documents" decision at the top of this doc already dropped folder-based categorization in favor of per-chunk auto-tagging, so a file has no single category at upload time to put in a commit message. `git_log.py` parses these trailers via `\x1f`/`\x1e`-delimited `git log` output, not free-text pattern matching.
+- **Never `git add -A`**: `git_utils.commit_paths()` stages exactly the path(s) touched by the current change. Blanket-staging would risk sweeping in unrelated uncommitted work elsewhere in the repo.
+- **Manual edit log is git-tracked too**: `manual_edit_log.py` appends a JSONL line to `data/manual_edit_log.jsonl` and commits *that* file — so the Qdrant-only changes git history can't see (re-tags, promotions) stay just as auditable as file changes, matching CLAUDE.md's git-based storage philosophy rather than living in an untracked side file.
+- **Re-index warning**: `reindex.check_reindex_warning()` checks whether any of a file's existing chunks have `auto_tagged: false`; `reindex_file()` raises `ReindexConfirmationRequiredError` (→ HTTP 409 with the warning payload) unless the caller passes `confirm=True`. Applies to both explicit re-indexing and `PUT /admin/files/{filename}` (replacing a file's content re-indexes it into staging under the same warning gate).
+- **Indexer made staging-aware**: `indexer.index_file()`/`index_directory()` gained an optional `collection` parameter (defaults to prod, preserving the CLI ingestion script's existing behavior) rather than hardcoding the production collection — the admin upload/reindex flows pass staging explicitly.
 
 ---
 

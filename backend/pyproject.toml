@@ -13,6 +13,8 @@ dependencies = [
     "voyageai>=0.3",
     "anthropic>=0.40",
     "pyyaml>=6.0",
+    "itsdangerous>=2.2",
+    "python-multipart>=0.0.12",
 ]
 
 [project.optional-dependencies]
@@ -39,6 +41,12 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+# FastAPI's DI markers (Depends/File/Query/...) are meant to be called as
+# argument defaults — that's how FastAPI recognizes them per-request, not
+# a shared-mutable-default bug B008 otherwise correctly flags.
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.File", "fastapi.Query", "fastapi.Cookie"]
 
 [tool.mypy]
 python_version = "3.12"
