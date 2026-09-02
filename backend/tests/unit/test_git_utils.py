@@ -1,6 +1,13 @@
 import subprocess
 
-from app.services.admin.git_utils import commit_paths, run_git
+import pytest
+
+from app.services.admin.git_utils import (
+    UnsafeFilenameError,
+    commit_paths,
+    resolve_safe_pdf_path,
+    run_git,
+)
 
 
 def _init_repo(path):
@@ -47,3 +54,71 @@ def test_commit_paths_stages_a_deletion(tmp_path):
     assert log.startswith(commit_hash)
     files_changed = run_git("show", "--stat", "--format=", commit_hash, cwd=tmp_path)
     assert "file.txt" in files_changed
+
+
+def test_commit_paths_is_a_no_op_when_content_is_byte_identical(tmp_path):
+    """Regression test: re-committing byte-identical content (e.g.
+    replace_file called with the same bytes already on disk) must not
+    raise — `git commit` fails on "nothing to commit", which isn't
+    actually an error condition here."""
+    _init_repo(tmp_path)
+    target = tmp_path / "file.txt"
+    target.write_text("hello")
+    first_hash = commit_paths(tmp_path, [target], "Add file.txt")
+
+    target.write_text("hello")  # identical content
+    second_hash = commit_paths(tmp_path, [target], "Re-add file.txt")
+
+    assert second_hash == first_hash
+    log_count = run_git("rev-list", "--count", "HEAD", cwd=tmp_path)
+    assert log_count == "1"
+
+
+def test_resolve_safe_pdf_path_accepts_a_normal_filename(tmp_path):
+    kb_dir = tmp_path / "knowledge_base"
+    kb_dir.mkdir()
+
+    resolved = resolve_safe_pdf_path(kb_dir, "handbook.pdf")
+
+    assert resolved == (kb_dir / "handbook.pdf").resolve()
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "../../etc/passwd.pdf",
+        "../secret.pdf",
+        "../../../../etc/cron.d/evil.pdf",
+        "subdir/../../escape.pdf",
+    ],
+)
+def test_resolve_safe_pdf_path_rejects_path_traversal(tmp_path, filename):
+    kb_dir = tmp_path / "knowledge_base"
+    kb_dir.mkdir()
+
+    with pytest.raises(UnsafeFilenameError):
+        resolve_safe_pdf_path(kb_dir, filename)
+
+
+def test_resolve_safe_pdf_path_rejects_an_absolute_path(tmp_path):
+    kb_dir = tmp_path / "knowledge_base"
+    kb_dir.mkdir()
+
+    with pytest.raises(UnsafeFilenameError):
+        resolve_safe_pdf_path(kb_dir, "/etc/passwd.pdf")
+
+
+def test_resolve_safe_pdf_path_rejects_a_non_pdf_extension(tmp_path):
+    kb_dir = tmp_path / "knowledge_base"
+    kb_dir.mkdir()
+
+    with pytest.raises(UnsafeFilenameError):
+        resolve_safe_pdf_path(kb_dir, "not-a-pdf.txt")
+
+
+def test_resolve_safe_pdf_path_rejects_the_directory_itself(tmp_path):
+    kb_dir = tmp_path / "knowledge_base"
+    kb_dir.mkdir()
+
+    with pytest.raises(UnsafeFilenameError):
+        resolve_safe_pdf_path(kb_dir, ".")

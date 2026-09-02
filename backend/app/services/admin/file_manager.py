@@ -1,7 +1,12 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.services.admin.git_utils import KNOWLEDGE_BASE_DIR, REPO_ROOT, commit_paths
+from app.services.admin.git_utils import (
+    KNOWLEDGE_BASE_DIR,
+    REPO_ROOT,
+    commit_paths,
+    resolve_safe_pdf_path,
+)
 
 
 @dataclass(frozen=True)
@@ -23,10 +28,10 @@ def upload_file(
     knowledge_base_dir: Path = KNOWLEDGE_BASE_DIR,
     repo_root: Path = REPO_ROOT,
 ) -> CommitInfo:
-    target = knowledge_base_dir / filename
+    knowledge_base_dir.mkdir(parents=True, exist_ok=True)
+    target = resolve_safe_pdf_path(knowledge_base_dir, filename)
     if target.exists():
         raise FileExistsError(f"'{filename}' already exists — use replace_file instead.")
-    knowledge_base_dir.mkdir(parents=True, exist_ok=True)
     target.write_bytes(content)
     return _commit(repo_root, target, "upload", filename)
 
@@ -37,7 +42,7 @@ def replace_file(
     knowledge_base_dir: Path = KNOWLEDGE_BASE_DIR,
     repo_root: Path = REPO_ROOT,
 ) -> CommitInfo:
-    target = knowledge_base_dir / filename
+    target = resolve_safe_pdf_path(knowledge_base_dir, filename)
     if not target.exists():
         raise FileNotFoundError(f"'{filename}' does not exist — use upload_file instead.")
     target.write_bytes(content)
@@ -49,7 +54,7 @@ def delete_file(
     knowledge_base_dir: Path = KNOWLEDGE_BASE_DIR,
     repo_root: Path = REPO_ROOT,
 ) -> CommitInfo:
-    target = knowledge_base_dir / filename
+    target = resolve_safe_pdf_path(knowledge_base_dir, filename)
     if not target.exists():
         raise FileNotFoundError(f"'{filename}' does not exist.")
     target.unlink()

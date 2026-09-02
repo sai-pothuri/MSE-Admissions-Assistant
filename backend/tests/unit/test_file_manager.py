@@ -54,6 +54,20 @@ def test_replace_file_overwrites_content_and_commits(repo):
     assert commit.action == "replace"
 
 
+def test_replace_file_with_identical_content_does_not_raise(repo):
+    """Regression test: replacing a file with byte-identical content used
+    to crash (git has nothing to commit) instead of succeeding as a no-op."""
+    repo_root, kb_dir = repo
+    file_manager.upload_file("handbook.pdf", b"v1", knowledge_base_dir=kb_dir, repo_root=repo_root)
+
+    commit = file_manager.replace_file(
+        "handbook.pdf", b"v1", knowledge_base_dir=kb_dir, repo_root=repo_root
+    )
+
+    assert (kb_dir / "handbook.pdf").read_bytes() == b"v1"
+    assert commit.action == "replace"
+
+
 def test_replace_file_raises_if_file_does_not_exist(repo):
     repo_root, kb_dir = repo
 

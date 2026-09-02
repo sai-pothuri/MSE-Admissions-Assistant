@@ -6,7 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.api.deps import current_user
 from app.config.settings import get_settings
 from app.services.admin import chunk_preview, retag
-from app.services.admin.git_utils import KNOWLEDGE_BASE_DIR
+from app.services.admin.git_utils import (
+    KNOWLEDGE_BASE_DIR,
+    UnsafeFilenameError,
+    resolve_safe_pdf_path,
+)
 
 router = APIRouter(
     prefix="/admin/chunks", tags=["admin-chunks"], dependencies=[Depends(current_user)]
@@ -24,7 +28,10 @@ def _resolve_collection(name: CollectionName) -> str:
 
 @router.get("/preview")
 def preview(filename: str) -> list[dict[str, Any]]:
-    path = KNOWLEDGE_BASE_DIR / filename
+    try:
+        path = resolve_safe_pdf_path(KNOWLEDGE_BASE_DIR, filename)
+    except UnsafeFilenameError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     if not path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"'{filename}' not found")
     return [asdict(chunk) for chunk in chunk_preview.preview_file(path)]

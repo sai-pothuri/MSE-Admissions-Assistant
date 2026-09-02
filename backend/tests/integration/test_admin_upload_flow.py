@@ -1,4 +1,5 @@
 import io
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -7,7 +8,7 @@ from app.api.routes import admin_chunks, admin_files, admin_staging
 from app.config.settings import get_settings
 from app.main import app
 from app.services.admin.file_manager import CommitInfo
-from app.services.admin.reindex import ReindexConfirmationRequiredError, ReindexWarning
+from app.services.admin.reindex import ReindexWarning
 from app.services.admin.retag import ChunkRecord
 from app.services.admin.staging import PromotionResult
 
@@ -110,27 +111,34 @@ def test_retag_rejects_an_invalid_category(client, monkeypatch):
 
 def test_replace_requires_confirmation_when_manual_corrections_exist(client, monkeypatch):
     monkeypatch.setattr(
-        admin_files.file_manager,
-        "replace_file",
-        lambda filename, content: CommitInfo(
-            commit_hash="def456", action="replace", filename=filename
+        admin_files.reindex,
+        "check_reindex_warning",
+        lambda collection, filename: ReindexWarning(
+            has_manual_corrections=True, corrected_chunk_count=2
         ),
     )
-
-    def raise_confirmation_required(path, collection, confirm):
-        raise ReindexConfirmationRequiredError(
-            ReindexWarning(has_manual_corrections=True, corrected_chunk_count=2)
-        )
-
-    monkeypatch.setattr(admin_files.reindex, "reindex_file", raise_confirmation_required)
+    replace_file_mock = MagicMock()
+    monkeypatch.setattr(admin_files.file_manager, "replace_file", replace_file_mock)
 
     response = client.put("/admin/files/handbook.pdf", files=_pdf_upload())
 
     assert response.status_code == 409
     assert response.json()["detail"]["corrected_chunk_count"] == 2
+    # Regression test: the file must not be touched at all when the warning
+    # fires unconfirmed — replace_file used to run *before* this check, so
+    # the old content (and the corrections on it) were already gone by the
+    # time the 409 was returned.
+    replace_file_mock.assert_not_called()
 
 
 def test_replace_proceeds_when_confirmed(client, monkeypatch):
+    monkeypatch.setattr(
+        admin_files.reindex,
+        "check_reindex_warning",
+        lambda collection, filename: ReindexWarning(
+            has_manual_corrections=True, corrected_chunk_count=2
+        ),
+    )
     monkeypatch.setattr(
         admin_files.file_manager,
         "replace_file",
@@ -138,7 +146,7 @@ def test_replace_proceeds_when_confirmed(client, monkeypatch):
             commit_hash="def456", action="replace", filename=filename
         ),
     )
-    monkeypatch.setattr(admin_files.reindex, "reindex_file", lambda path, collection, confirm: 6)
+    monkeypatch.setattr(admin_files, "index_file", lambda path, collection: 6)
 
     response = client.put(
         "/admin/files/handbook.pdf", files=_pdf_upload(), params={"confirm": "true"}
@@ -146,6 +154,29 @@ def test_replace_proceeds_when_confirmed(client, monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["chunks_indexed"] == 6
+
+
+def test_replace_proceeds_without_confirmation_when_no_manual_corrections(client, monkeypatch):
+    monkeypatch.setattr(
+        admin_files.reindex,
+        "check_reindex_warning",
+        lambda collection, filename: ReindexWarning(
+            has_manual_corrections=False, corrected_chunk_count=0
+        ),
+    )
+    monkeypatch.setattr(
+        admin_files.file_manager,
+        "replace_file",
+        lambda filename, content: CommitInfo(
+            commit_hash="def456", action="replace", filename=filename
+        ),
+    )
+    monkeypatch.setattr(admin_files, "index_file", lambda path, collection: 3)
+
+    response = client.put("/admin/files/handbook.pdf", files=_pdf_upload())
+
+    assert response.status_code == 200
+    assert response.json()["chunks_indexed"] == 3
 
 
 def test_promote_moves_staged_chunks_to_prod(client, monkeypatch):
@@ -189,8 +220,73 @@ def test_delete_removes_the_file_and_chunks_from_both_collections(client, monkey
     response = client.delete("/admin/files/handbook.pdf")
 
     assert response.status_code == 200
+    assert response.json()["warnings"] == []
     settings = get_settings()
     assert deleted_from == [settings.qdrant_collection_staging, settings.qdrant_collection_prod]
+
+
+def test_delete_reports_a_warning_instead_of_crashing_when_qdrant_cleanup_fails(
+    client, monkeypatch
+):
+    """Regression test: the git removal already happened and can't be
+    rolled back, and retrying this endpoint just 404s once the file's gone
+    from disk — a Qdrant cleanup failure must be reported back, not left
+    to crash the request opaquely with no record of what still needs
+    manual cleanup."""
+    monkeypatch.setattr(
+        admin_files.file_manager,
+        "delete_file",
+        lambda filename: CommitInfo(commit_hash="ghi789", action="delete", filename=filename),
+    )
+
+    def flaky_delete_chunks(collection, filename):
+        settings = get_settings()
+        if collection == settings.qdrant_collection_prod:
+            raise RuntimeError("Qdrant connection reset")
+
+    monkeypatch.setattr(admin_files.retag, "delete_chunks", flaky_delete_chunks)
+
+    response = client.delete("/admin/files/handbook.pdf")
+
+    assert response.status_code == 200
+    assert response.json()["commit_hash"] == "ghi789"
+    assert len(response.json()["warnings"]) == 1
+    assert "prod" in response.json()["warnings"][0]
+
+
+def test_upload_rejects_a_path_traversal_filename(client, monkeypatch):
+    """The route must translate file_manager's UnsafeFilenameError into a
+    clean 400, not an unhandled 500 — file_manager.upload_file is mocked
+    here to isolate that translation; resolve_safe_pdf_path's actual
+    traversal-blocking logic has its own direct unit tests
+    (test_git_utils.py)."""
+    from app.services.admin.git_utils import UnsafeFilenameError
+
+    def raise_unsafe(filename, content):
+        raise UnsafeFilenameError(f"'{filename}' is not a valid filename")
+
+    monkeypatch.setattr(admin_files.file_manager, "upload_file", raise_unsafe)
+
+    response = client.post(
+        "/admin/files/upload", files=_pdf_upload(filename="../../../../etc/evil.pdf")
+    )
+
+    assert response.status_code == 400
+
+
+def test_preview_rejects_a_path_traversal_filename(client, monkeypatch):
+    from app.services.admin.git_utils import UnsafeFilenameError
+
+    def raise_unsafe(knowledge_base_dir, filename):
+        raise UnsafeFilenameError(f"'{filename}' is not a valid filename")
+
+    monkeypatch.setattr(admin_chunks, "resolve_safe_pdf_path", raise_unsafe)
+
+    response = client.get(
+        "/admin/chunks/preview", params={"filename": "../../../../etc/passwd.pdf"}
+    )
+
+    assert response.status_code == 400
 
 
 def test_full_admin_flow_requires_authentication_at_every_step():
