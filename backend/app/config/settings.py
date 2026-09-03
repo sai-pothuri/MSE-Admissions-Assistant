@@ -17,6 +17,13 @@ class Settings(BaseSettings):
     anthropic_generation_model: str = "claude-sonnet-5"
     anthropic_classification_model: str = "claude-haiku-4-5-20251001"
 
+    # Single shared faculty password (CLAUDE.md: "simple password auth for
+    # now"), plus the key used to sign admin session cookies. Both required
+    # with no default — an admin console with a guessable/default password
+    # is worse than one that fails to start.
+    admin_password: str
+    admin_session_secret: str
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -18,6 +18,8 @@ def _test_env(monkeypatch):
     instance built under a different test's env."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
     monkeypatch.setenv("VOYAGE_API_KEY", "test-voyage-key")
+    monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
+    monkeypatch.setenv("ADMIN_SESSION_SECRET", "test-admin-session-secret")
     for getter in _CACHED_GETTERS:
         getter.cache_clear()
     yield

@@ -36,6 +36,29 @@ def test_index_file_upserts_one_point_per_chunk(monkeypatch):
     assert points[0].payload["auto_tagged"] is True
 
 
+def test_index_file_targets_the_given_collection_not_prod(monkeypatch):
+    """Regression test: the admin console (Phase 4) indexes uploads into
+    staging, not prod — index_file must use the passed `collection`
+    throughout (both the delete and the upsert), not the settings default."""
+    fake_blocks = [ExtractedBlock(text="Some admissions info.", page_number=1)]
+    fake_chunks = [Chunk(text="Some admissions info.", page_number=1)]
+    mock_qdrant = MagicMock()
+
+    monkeypatch.setattr(indexer, "extract_blocks", lambda path: fake_blocks)
+    monkeypatch.setattr(indexer, "chunk_blocks", lambda blocks: fake_chunks)
+    monkeypatch.setattr(indexer, "embed_documents", lambda client, texts: [[0.1, 0.2, 0.3]])
+    monkeypatch.setattr(indexer, "classify_chunk", lambda text: "admissions")
+    monkeypatch.setattr(indexer, "get_qdrant_client", lambda: mock_qdrant)
+    monkeypatch.setattr(indexer, "get_voyage_client", lambda: MagicMock())
+
+    indexer.index_file(
+        Path("data/knowledge_base/general/handbook.pdf"), collection="mse_kb_staging"
+    )
+
+    assert mock_qdrant.delete.call_args.kwargs["collection_name"] == "mse_kb_staging"
+    assert mock_qdrant.upsert.call_args.kwargs["collection_name"] == "mse_kb_staging"
+
+
 def test_index_file_deletes_existing_chunks_for_the_file_before_upserting(monkeypatch):
     """Re-indexing must be idempotent: old chunks for this source_file are
     cleared first so re-running ingestion doesn't duplicate them."""
@@ -77,9 +100,7 @@ def test_index_file_preserves_existing_chunks_when_classification_fails_partway(
 
     monkeypatch.setattr(indexer, "extract_blocks", lambda path: fake_blocks)
     monkeypatch.setattr(indexer, "chunk_blocks", lambda blocks: fake_chunks)
-    monkeypatch.setattr(
-        indexer, "embed_documents", lambda client, texts: [[0.1, 0.2], [0.3, 0.4]]
-    )
+    monkeypatch.setattr(indexer, "embed_documents", lambda client, texts: [[0.1, 0.2], [0.3, 0.4]])
     monkeypatch.setattr(indexer, "classify_chunk", failing_classify_chunk)
     monkeypatch.setattr(indexer, "get_qdrant_client", lambda: mock_qdrant)
     monkeypatch.setattr(indexer, "get_voyage_client", lambda: MagicMock())
@@ -111,7 +132,7 @@ def test_index_directory_continues_after_one_file_fails(monkeypatch, tmp_path):
     good_pdf.write_bytes(b"")
     bad_pdf.write_bytes(b"")
 
-    def fake_index_file(path: Path) -> int:
+    def fake_index_file(path: Path, collection: str | None = None) -> int:
         if path.name == "bad.pdf":
             raise ValueError("corrupt PDF")
         return 3

@@ -4,9 +4,29 @@ RAG-based chatbot answering prospective student questions for CMU's Master of So
 
 ## Status
 
-Phase 3 — eval harness & threshold calibration. The `/query` pipeline runs: pre-classification (off-limits topic check) → query category classification → category-filtered retrieval (falling back to unfiltered whenever it scores higher, not only when the filter returns nothing) → confidence gate → generation → numerical verification (tuition/deadlines only). Ingestion auto-tags each chunk's category via Claude rather than inheriting it from the source folder. No admin console yet (see `plan.md`).
+Phase 4 — admin console backend (API only, no UI yet — see `plan.md`). The `/query` pipeline runs: pre-classification (off-limits topic check) → query category classification → category-filtered retrieval (falling back to unfiltered whenever it scores higher, not only when the filter returns nothing) → confidence gate → generation → numerical verification (tuition/deadlines only). Ingestion auto-tags each chunk's category via Claude rather than inheriting it from the source folder.
 
 Guardrail config lives in `backend/app/config/`: category taxonomy (`taxonomy.py`), off-limits topics (`offlimits.yaml`, edit without touching code), and thresholds (`thresholds.py` — `min_top1_score=0.40`, calibrated against the eval set in Phase 3; see `plan.md` for the reasoning).
+
+## Admin console API
+
+Password-protected (`ADMIN_PASSWORD`/`ADMIN_SESSION_SECRET` in `.env`), session via signed cookie:
+
+```
+POST   /admin/login                        {"password": "..."}  -> sets session cookie
+POST   /admin/logout
+GET    /admin/files                        list uploaded PDFs
+POST   /admin/files/upload                 multipart file -> git commit + index into staging
+PUT    /admin/files/{filename}              replace + re-index into staging (409 + confirm=true if it has manual re-tags)
+DELETE /admin/files/{filename}              remove file + its chunks from staging and prod
+GET    /admin/files/edit-log                git history + Qdrant-only changes (retags, promotions)
+GET    /admin/chunks/preview?filename=...    dry-run extract+chunk+auto-tag, no indexing
+GET    /admin/chunks?filename=...&collection=staging|prod
+PATCH  /admin/chunks/{point_id}?category=... manual re-tag (in place, sets auto_tagged=false)
+POST   /admin/staging/promote/{filename}     copy a file's staged chunks to prod
+```
+
+Uploads always land in the staging collection first — nothing reaches the live `/query` pipeline (which only reads prod) until explicitly promoted.
 
 ## Evaluation
 
@@ -21,7 +41,7 @@ Every guardrail/prompt/threshold change should be re-checked against this set be
 
 ## Local development setup
 
-1. Copy `.env.example` to `.env` in `backend/` and fill in `ANTHROPIC_API_KEY` and `VOYAGE_API_KEY`.
+1. Copy `.env.example` to `.env` in `backend/` and fill in `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `ADMIN_PASSWORD`, and `ADMIN_SESSION_SECRET` (e.g. `openssl rand -hex 32`).
 2. Start Qdrant:
    ```
    cd infra && docker compose up -d
@@ -33,7 +53,7 @@ Every guardrail/prompt/threshold change should be re-checked against this set be
    source .venv/bin/activate
    pip install -e ".[dev]"
    ```
-4. Create the Qdrant collection (one-time, or after wiping Qdrant storage):
+4. Create the Qdrant collections (prod + staging; one-time, or after wiping Qdrant storage):
    ```
    python -m app.scripts.init_collection
    ```
